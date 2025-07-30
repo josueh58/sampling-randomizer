@@ -13,7 +13,7 @@ import math
 st.set_page_config(page_title="Reservoir Sampling Grid", layout="wide")
 st.title("🎣 Reservoir Sampling Randomizer v2.8")
 
-# === Known reservoirs for map centering
+# === Map centers for convenience
 RESERVOIRS = {
     "Steinaker Reservoir": [40.525, -109.55],
     "Red Fleet Reservoir": [40.625, -109.465],
@@ -35,13 +35,15 @@ if "clipped_grid" not in st.session_state:
     st.session_state.clipped_grid = None
 if "site_coords" not in st.session_state:
     st.session_state.site_coords = []
+if "grid_size_deg" not in st.session_state:
+    st.session_state.grid_size_deg = None
 
 # === Drawing map
 m = folium.Map(location=center_latlon, zoom_start=15, tiles="Esri.WorldImagery")
 Draw(export=True).add_to(m)
 draw_data = st_folium(m, height=600, width=1000)
 
-# === Handle drawing + grid generation
+# === Grid generation logic
 if generate:
     drawings = draw_data.get("all_drawings", [])
     if not drawings:
@@ -52,30 +54,28 @@ if generate:
             st.error("⚠️ Only polygon shapes are accepted.")
         else:
             try:
-                # Convert to Shapely polygon
                 coords = shape["geometry"]["coordinates"][0]
                 lake_poly = Polygon(coords)
                 st.session_state.lake_polygon = lake_poly
 
-                # === Project polygon to metric system to calculate area (UTM)
+                # Project polygon to UTM for accurate area calc
                 project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32612", always_xy=True).transform
                 lake_poly_utm = transform(project, lake_poly)
                 lake_area_m2 = lake_poly_utm.area
                 lake_area_ha = lake_area_m2 / 10000
                 st.sidebar.markdown(f"🧮 Lake Area: **{lake_area_ha:.1f} ha**")
 
-                # === Auto-calculate grid size (target ~1 site per 10 ha, 2x oversample for grid density)
+                # Auto-calculate grid cell size
                 target_cells = num_sites * 2
                 cell_area_m2 = lake_area_m2 / target_cells
                 cell_size_m = math.sqrt(cell_area_m2)
-
-                # Convert back to degrees (approximate for local UTM zone)
-                meters_per_degree = 111000  # approximation for latitude
+                meters_per_degree = 111000  # approx
                 grid_size_deg = cell_size_m / meters_per_degree
+                st.session_state.grid_size_deg = grid_size_deg
 
-                st.sidebar.markdown(f"📐 Auto Grid Cell Size: **{grid_size_deg:.4f} degrees**")
+                st.sidebar.markdown(f"📐 Auto Grid Cell Size: **{grid_size_deg:.4f}°**")
 
-                # === Generate square grid over bounding box
+                # Generate square grid
                 minx, miny, maxx, maxy = lake_poly.bounds
                 grid_cells = []
                 x = minx
@@ -87,17 +87,16 @@ if generate:
                         y += grid_size_deg
                     x += grid_size_deg
 
-                # Convert to GeoDataFrame
                 grid_gdf = gpd.GeoDataFrame(geometry=grid_cells, crs="EPSG:4326")
                 lake_gdf = gpd.GeoDataFrame(geometry=[lake_poly], crs="EPSG:4326")
 
-                # Clip grid to polygon
+                # Clip grid to lake polygon
                 clipped = gpd.overlay(grid_gdf, lake_gdf, how="intersection")
                 st.session_state.clipped_grid = clipped
 
                 st.success(f"✅ {len(clipped)} grid cells intersect the lake boundary.")
 
-                # Randomly select sites
+                # Random selection of sites
                 selected = clipped.sample(min(len(clipped), num_sites))
                 centroids = [(geom.centroid.y, geom.centroid.x) for geom in selected.geometry]
                 st.session_state.site_coords = centroids
@@ -107,7 +106,7 @@ if generate:
             except Exception as e:
                 st.error(f"❌ Failed to generate grid: {e}")
 
-# === Display result map
+# === Display results
 if st.session_state.lake_polygon and st.session_state.clipped_grid is not None:
     result_map = folium.Map(
         location=[st.session_state.lake_polygon.centroid.y,
@@ -116,7 +115,7 @@ if st.session_state.lake_polygon and st.session_state.clipped_grid is not None:
         tiles="Esri.WorldImagery"
     )
 
-    # Add polygon
+    # Add lake polygon
     folium.GeoJson(st.session_state.lake_polygon, name="Lake Boundary").add_to(result_map)
 
     # Add clipped grid
@@ -126,17 +125,20 @@ if st.session_state.lake_polygon and st.session_state.clipped_grid is not None:
         }).add_to(result_map)
 
     # Highlight selected cells
-    selected_polys = gpd.GeoSeries([Polygon([(pt[1]-grid_size_deg/2, pt[0]-grid_size_deg/2),
-                                             (pt[1]+grid_size_deg/2, pt[0]-grid_size_deg/2),
-                                             (pt[1]+grid_size_deg/2, pt[0]+grid_size_deg/2),
-                                             (pt[1]-grid_size_deg/2, pt[0]+grid_size_deg/2)])
-                                    for pt in st.session_state.site_coords], crs="EPSG:4326")
+    gsize = st.session_state.grid_size_deg
+    selected_polys = gpd.GeoSeries([Polygon([
+        (pt[1]-gsize/2, pt[0]-gsize/2),
+        (pt[1]+gsize/2, pt[0]-gsize/2),
+        (pt[1]+gsize/2, pt[0]+gsize/2),
+        (pt[1]-gsize/2, pt[0]+gsize/2)
+    ]) for pt in st.session_state.site_coords], crs="EPSG:4326")
+
     for geom in selected_polys:
         folium.GeoJson(geom, style_function=lambda x: {
             "color": "blue", "weight": 2, "fillOpacity": 0.2
         }).add_to(result_map)
 
-    # Add markers
+    # Add site markers
     for i, (lat, lon) in enumerate(st.session_state.site_coords):
         folium.Marker([lat, lon], popup=f"Site {i+1}", icon=folium.Icon(color="blue")).add_to(result_map)
 
@@ -152,6 +154,4 @@ if st.session_state.lake_polygon and st.session_state.clipped_grid is not None:
         file_name="random_sites.csv",
         mime="text/csv"
     )
-
-
 
