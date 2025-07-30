@@ -10,22 +10,22 @@ from shapely.ops import transform
 import pyproj
 import math
 
-st.set_page_config(page_title="Reservoir Sampling Grid", layout="wide")
-st.title("🎣 Reservoir Sampling Randomizer v2.9")
+st.set_page_config(page_title="Reservoir Sampling Tool", layout="wide")
+st.title("🎣 Reservoir Sampling Randomizer v3.0")
 
-# === Reservoir centers
+# === Centering map on known reservoirs
 RESERVOIRS = {
     "Steinaker Reservoir": [40.525, -109.55],
     "Red Fleet Reservoir": [40.625, -109.465],
     "Big Sandwash Reservoir": [40.314, -110.058]
 }
 
-st.sidebar.subheader("📍 Reservoir Centering")
+st.sidebar.subheader("📍 Map Settings")
 selected_res = st.sidebar.selectbox("Center Map On", list(RESERVOIRS.keys()))
 center_latlon = RESERVOIRS[selected_res]
 
 num_sites = st.sidebar.slider("🎯 Number of Random Sample Sites", 1, 50, 6)
-generate = st.sidebar.button("⚙️ Generate Sites")
+generate = st.sidebar.button("⚙️ Generate New Grid + Sites")
 
 # === Session State
 if "lake_polygon" not in st.session_state:
@@ -37,13 +37,19 @@ if "grid_size_m" not in st.session_state:
 if "grid_size_deg" not in st.session_state:
     st.session_state.grid_size_deg = None
 
-# === Draw polygon on map
+# === Draw map
 m = folium.Map(location=center_latlon, zoom_start=15, tiles="Esri.WorldImagery")
 Draw(export=True).add_to(m)
 draw_data = st_folium(m, height=600, width=1000)
 
-# === Main logic
+# === Generate grid + sites
 if generate:
+    # Always clear previous data
+    st.session_state.lake_polygon = None
+    st.session_state.site_coords = []
+    st.session_state.grid_size_m = None
+    st.session_state.grid_size_deg = None
+
     drawings = draw_data.get("all_drawings", [])
     if not drawings:
         st.error("⚠️ Please draw a polygon first.")
@@ -56,30 +62,29 @@ if generate:
             lake_poly = Polygon(coords)
             st.session_state.lake_polygon = lake_poly
 
-            # Project polygon to UTM for area calculation
+            # Project to UTM for area calculation
             project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32612", always_xy=True).transform
             lake_poly_utm = transform(project, lake_poly)
             area_m2 = lake_poly_utm.area
             area_acres = area_m2 * 0.000247105
             st.sidebar.markdown(f"📏 Lake Area: **{area_acres:.1f} acres**")
 
-            # Apply AFS-based spacing
+            # AFS-based spacing rules
             if area_acres < 300:
                 grid_size_m = 61
             elif area_acres <= 800:
                 grid_size_m = 91
             else:
-                grid_size_m = 122  # or 100 if you'd rather round down
+                grid_size_m = 122
 
             st.session_state.grid_size_m = grid_size_m
-            st.sidebar.markdown(f"📐 Grid Cell Spacing: **{grid_size_m} meters**")
+            st.sidebar.markdown(f"📐 Grid Spacing: **{grid_size_m} m**")
 
-            # Convert meters to degrees
             meters_per_degree = 111000
             grid_size_deg = grid_size_m / meters_per_degree
             st.session_state.grid_size_deg = grid_size_deg
 
-            # Create grid in degrees
+            # Generate grid
             minx, miny, maxx, maxy = lake_poly.bounds
             grid_cells = []
             x = minx
@@ -95,23 +100,26 @@ if generate:
             grid_gdf = gpd.GeoDataFrame(geometry=grid_cells, crs="EPSG:4326")
 
             if len(grid_gdf) == 0:
-                st.error("❌ Grid generation failed — too small or invalid polygon.")
+                st.error("❌ Grid generation failed — polygon may be too small.")
             else:
                 selected_cells = grid_gdf.sample(min(num_sites, len(grid_gdf)))
                 centroids = [(cell.centroid.y, cell.centroid.x) for cell in selected_cells.geometry]
                 st.session_state.site_coords = centroids
-                st.success("✅ Random sites generated!")
+                st.success("✅ Sampling sites generated!")
 
-# === Display map with draggable sites
+# === Display map + allow manual adjustment
 if st.session_state.lake_polygon and st.session_state.site_coords:
-    final_map = folium.Map(location=[st.session_state.lake_polygon.centroid.y,
-                                     st.session_state.lake_polygon.centroid.x],
-                           zoom_start=15, tiles="Esri.WorldImagery")
+    result_map = folium.Map(
+        location=[st.session_state.lake_polygon.centroid.y,
+                  st.session_state.lake_polygon.centroid.x],
+        zoom_start=15,
+        tiles="Esri.WorldImagery"
+    )
 
-    # Add lake polygon
-    folium.GeoJson(st.session_state.lake_polygon, name="Lake Boundary").add_to(final_map)
+    # Add polygon
+    folium.GeoJson(st.session_state.lake_polygon, name="Lake Boundary").add_to(result_map)
 
-    # Add grid (optional for visibility)
+    # Add grid overlay
     gsize = st.session_state.grid_size_deg
     minx, miny, maxx, maxy = st.session_state.lake_polygon.bounds
     x = minx
@@ -122,36 +130,39 @@ if st.session_state.lake_polygon and st.session_state.site_coords:
             if st.session_state.lake_polygon.intersects(cell):
                 folium.GeoJson(cell, style_function=lambda x: {
                     "color": "gray", "weight": 1, "fillOpacity": 0
-                }).add_to(final_map)
+                }).add_to(result_map)
             y += gsize
         x += gsize
 
-    # Add draggable markers
+    # Add draggable sample markers
     for i, (lat, lon) in enumerate(st.session_state.site_coords):
         folium.Marker(
             location=[lat, lon],
-            popup=f"Site {i + 1}",
+            popup=f"Site {i+1}",
             draggable=True,
             icon=folium.Icon(color="blue")
-        ).add_to(final_map)
+        ).add_to(result_map)
 
-    st.subheader("🗺️ Adjust Site Locations")
-    updated_data = st_folium(final_map, height=600, width=1000)
+    st.subheader("🗺️ Adjust Sample Sites")
+    map_response = st_folium(result_map, height=600, width=1000)
 
-    # === Parse any updated marker locations
+    # Update coordinates if markers moved
     updated_coords = []
-    if updated_data.get("last_object_clicked") or updated_data.get("all_drawings"):
-        for marker in updated_data.get("all_drawings", []):
-            if marker["geometry"]["type"] == "Point":
-                coords = marker["geometry"]["coordinates"]
+    if map_response.get("all_drawings"):
+        for obj in map_response["all_drawings"]:
+            if obj["geometry"]["type"] == "Point":
+                coords = obj["geometry"]["coordinates"]
                 updated_coords.append((coords[1], coords[0]))  # lat, lon
         if updated_coords:
             st.session_state.site_coords = updated_coords
-            st.success("🟢 Site locations updated from manual edits!")
+            st.success("🟢 Updated site locations saved from manual edits!")
 
-    # === Download CSV
+    # Download export
     df = pd.DataFrame(st.session_state.site_coords, columns=["Latitude", "Longitude"])
-    st.subheader("📥 Download Coordinates")
-    st.download_button("Download CSV", df.to_csv(index=False), "adjusted_sites.csv", "text/csv")
-
-
+    st.subheader("📥 Download Site Coordinates")
+    st.download_button(
+        label="Download CSV",
+        data=df.to_csv(index=False),
+        file_name="random_sites.csv",
+        mime="text/csv"
+    )
