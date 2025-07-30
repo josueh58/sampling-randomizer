@@ -8,7 +8,7 @@ import random
 import pandas as pd
 
 st.set_page_config(page_title="Reservoir Sampling Grid", layout="wide")
-st.title("🎣 Reservoir Sampling Randomizer v2.5")
+st.title("🎣 Reservoir Sampling Randomizer v2.6")
 
 # === Map Centers for known reservoirs ===
 RESERVOIRS = {
@@ -22,7 +22,7 @@ st.sidebar.subheader("📍 Reservoir + Sampling Settings")
 selected_res = st.sidebar.selectbox("Select Reservoir to Center Map", list(RESERVOIRS.keys()))
 center_latlon = RESERVOIRS[selected_res]
 
-grid_size = st.sidebar.number_input("Grid Cell Size (degrees ~0.001 = ~110m)", value=0.001, step=0.0005, format="%.4f")
+grid_size = st.sidebar.number_input("Grid Cell Size (degrees ~0.001 ≈ 110m)", value=0.001, step=0.0005, format="%.4f")
 num_sites = st.sidebar.slider("Number of Sites to Randomly Select", 1, 30, 6)
 generate = st.sidebar.button("⚙️ Generate Grid + Random Sites")
 
@@ -31,6 +31,8 @@ if "site_coords" not in st.session_state:
     st.session_state.site_coords = []
 if "lake_polygon" not in st.session_state:
     st.session_state.lake_polygon = None
+if "selected_cells" not in st.session_state:
+    st.session_state.selected_cells = []
 
 # === Drawing Map ===
 m = folium.Map(location=center_latlon, zoom_start=15, tiles="Esri.WorldImagery")
@@ -69,6 +71,7 @@ if generate:
 
                 # Random selection
                 selected_cells = random.sample(grid_cells, min(len(grid_cells), num_sites))
+                st.session_state.selected_cells = selected_cells
                 st.session_state.site_coords = [(cell.centroid.y, cell.centroid.x) for cell in selected_cells]
                 st.success("✅ Sampling sites selected! Scroll down to view.")
 
@@ -76,13 +79,36 @@ if generate:
                 st.error(f"❌ Failed to process shape: {e}")
 
 # === Display Final Map with Grid + Points ===
-if st.session_state.lake_polygon:
-    result_map = folium.Map(location=[st.session_state.lake_polygon.centroid.y,
-                                      st.session_state.lake_polygon.centroid.x],
-                            zoom_start=15, tiles="Esri.WorldImagery")
+if st.session_state.lake_polygon and st.session_state.site_coords:
+    result_map = folium.Map(
+        location=[st.session_state.lake_polygon.centroid.y,
+                  st.session_state.lake_polygon.centroid.x],
+        zoom_start=15,
+        tiles="Esri.WorldImagery"
+    )
 
-    # Add polygon
-    folium.GeoJson(st.session_state.lake_polygon, name="Drawn Reservoir").add_to(result_map)
+    # Add user-drawn polygon
+    folium.GeoJson(st.session_state.lake_polygon, name="Reservoir Boundary").add_to(result_map)
+
+    # Add all intersecting grid cells as light grey outlines
+    minx, miny, maxx, maxy = st.session_state.lake_polygon.bounds
+    grid_cells = []
+    x = minx
+    while x < maxx:
+        y = miny
+        while y < maxy:
+            cell = box(x, y, x + grid_size, y + grid_size)
+            if st.session_state.lake_polygon.intersects(cell):
+                grid_cells.append(cell)
+            y += grid_size
+        x += grid_size
+
+    for cell in grid_cells:
+        folium.GeoJson(cell, style_function=lambda x: {"color": "gray", "weight": 1, "fillOpacity": 0}).add_to(result_map)
+
+    # Highlight selected grid cells in blue
+    for cell in st.session_state.selected_cells:
+        folium.GeoJson(cell, style_function=lambda x: {"color": "blue", "weight": 2, "fillOpacity": 0.1}).add_to(result_map)
 
     # Add site markers
     for i, (lat, lon) in enumerate(st.session_state.site_coords):
@@ -92,7 +118,7 @@ if st.session_state.lake_polygon:
             icon=folium.Icon(color="blue")
         ).add_to(result_map)
 
-    st.subheader("📍 Final Sample Site Map")
+    st.subheader("📍 Final Sample Site Map (with Grid)")
     st_folium(result_map, height=600, width=1000)
 
     # Export CSV
@@ -104,3 +130,4 @@ if st.session_state.lake_polygon:
         file_name="random_sites.csv",
         mime="text/csv"
     )
+
