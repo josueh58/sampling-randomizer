@@ -6,9 +6,12 @@ import geopandas as gpd
 from shapely.geometry import Polygon, box
 import random
 import pandas as pd
+from shapely.ops import transform
+import pyproj
+import math
 
 st.set_page_config(page_title="Reservoir Sampling Grid", layout="wide")
-st.title("🎣 Reservoir Sampling Randomizer v2.7")
+st.title("🎣 Reservoir Sampling Randomizer v2.8")
 
 # === Known reservoirs for map centering
 RESERVOIRS = {
@@ -22,8 +25,7 @@ st.sidebar.subheader("📍 Reservoir + Sampling Settings")
 selected_res = st.sidebar.selectbox("Center Map On", list(RESERVOIRS.keys()))
 center_latlon = RESERVOIRS[selected_res]
 
-grid_size = st.sidebar.number_input("Grid Cell Size (degrees ~0.001 ≈ 110m)", value=0.001, step=0.0005, format="%.4f")
-num_sites = st.sidebar.slider("Number of Random Sample Sites", 1, 30, 6)
+num_sites = st.sidebar.slider("Number of Random Sample Sites", 1, 50, 6)
 generate = st.sidebar.button("⚙️ Generate Sites")
 
 # === Session state setup
@@ -55,34 +57,52 @@ if generate:
                 lake_poly = Polygon(coords)
                 st.session_state.lake_polygon = lake_poly
 
-                # Generate square grid over bounding box
+                # === Project polygon to metric system to calculate area (UTM)
+                project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32612", always_xy=True).transform
+                lake_poly_utm = transform(project, lake_poly)
+                lake_area_m2 = lake_poly_utm.area
+                lake_area_ha = lake_area_m2 / 10000
+                st.sidebar.markdown(f"🧮 Lake Area: **{lake_area_ha:.1f} ha**")
+
+                # === Auto-calculate grid size (target ~1 site per 10 ha, 2x oversample for grid density)
+                target_cells = num_sites * 2
+                cell_area_m2 = lake_area_m2 / target_cells
+                cell_size_m = math.sqrt(cell_area_m2)
+
+                # Convert back to degrees (approximate for local UTM zone)
+                meters_per_degree = 111000  # approximation for latitude
+                grid_size_deg = cell_size_m / meters_per_degree
+
+                st.sidebar.markdown(f"📐 Auto Grid Cell Size: **{grid_size_deg:.4f} degrees**")
+
+                # === Generate square grid over bounding box
                 minx, miny, maxx, maxy = lake_poly.bounds
                 grid_cells = []
                 x = minx
                 while x < maxx:
                     y = miny
                     while y < maxy:
-                        cell = box(x, y, x + grid_size, y + grid_size)
+                        cell = box(x, y, x + grid_size_deg, y + grid_size_deg)
                         grid_cells.append(cell)
-                        y += grid_size
-                    x += grid_size
+                        y += grid_size_deg
+                    x += grid_size_deg
 
                 # Convert to GeoDataFrame
                 grid_gdf = gpd.GeoDataFrame(geometry=grid_cells, crs="EPSG:4326")
                 lake_gdf = gpd.GeoDataFrame(geometry=[lake_poly], crs="EPSG:4326")
 
-                # Clip grid to lake polygon
+                # Clip grid to polygon
                 clipped = gpd.overlay(grid_gdf, lake_gdf, how="intersection")
                 st.session_state.clipped_grid = clipped
 
                 st.success(f"✅ {len(clipped)} grid cells intersect the lake boundary.")
 
-                # Randomly select N cells and get centroids
+                # Randomly select sites
                 selected = clipped.sample(min(len(clipped), num_sites))
                 centroids = [(geom.centroid.y, geom.centroid.x) for geom in selected.geometry]
                 st.session_state.site_coords = centroids
 
-                st.success("🎯 Random sample sites selected!")
+                st.success("🎯 Sampling sites selected!")
 
             except Exception as e:
                 st.error(f"❌ Failed to generate grid: {e}")
@@ -105,25 +125,25 @@ if st.session_state.lake_polygon and st.session_state.clipped_grid is not None:
             "color": "gray", "weight": 1, "fillOpacity": 0
         }).add_to(result_map)
 
-    # Highlight selected grid cells
-    selected_polys = gpd.GeoSeries([Polygon([(pt[1]-grid_size/2, pt[0]-grid_size/2),
-                                             (pt[1]+grid_size/2, pt[0]-grid_size/2),
-                                             (pt[1]+grid_size/2, pt[0]+grid_size/2),
-                                             (pt[1]-grid_size/2, pt[0]+grid_size/2)])
+    # Highlight selected cells
+    selected_polys = gpd.GeoSeries([Polygon([(pt[1]-grid_size_deg/2, pt[0]-grid_size_deg/2),
+                                             (pt[1]+grid_size_deg/2, pt[0]-grid_size_deg/2),
+                                             (pt[1]+grid_size_deg/2, pt[0]+grid_size_deg/2),
+                                             (pt[1]-grid_size_deg/2, pt[0]+grid_size_deg/2)])
                                     for pt in st.session_state.site_coords], crs="EPSG:4326")
     for geom in selected_polys:
         folium.GeoJson(geom, style_function=lambda x: {
             "color": "blue", "weight": 2, "fillOpacity": 0.2
         }).add_to(result_map)
 
-    # Add sample site markers
+    # Add markers
     for i, (lat, lon) in enumerate(st.session_state.site_coords):
         folium.Marker([lat, lon], popup=f"Site {i+1}", icon=folium.Icon(color="blue")).add_to(result_map)
 
     st.subheader("📍 Final Sample Site Map")
     st_folium(result_map, height=600, width=1000)
 
-    # Download CSV
+    # Export CSV
     df = pd.DataFrame(st.session_state.site_coords, columns=["Latitude", "Longitude"])
     st.subheader("📥 Export Coordinates")
     st.download_button(
@@ -132,5 +152,6 @@ if st.session_state.lake_polygon and st.session_state.clipped_grid is not None:
         file_name="random_sites.csv",
         mime="text/csv"
     )
+
 
 
