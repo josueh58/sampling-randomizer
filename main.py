@@ -10,42 +10,48 @@ import pandas as pd
 from PIL import Image
 import base64
 from io import BytesIO
+import os
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Function to encode and display H.A.DREAMS logo
-def get_logo_base64(path="hadreams_logo.png", width=100):
-    img = Image.open(path)
+# ───────────────────────────────────────────────────────────────
+# ✅ Function to embed H.A.DREAMS logo using absolute path
+def get_logo_base64(filename="hadreams_logo.png", width=100):
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    logo_path = os.path.join(base_path, filename)
+
+    if not os.path.exists(logo_path):
+        raise FileNotFoundError(f"Logo file not found at: {logo_path}")
+
+    img = Image.open(logo_path)
     buffer = BytesIO()
     img.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode()
+
     return f"""
     <div style='position: fixed; top: 10px; left: 10px; z-index: 1000;'>
         <img src="data:image/png;base64,{encoded}" width="{width}"/>
     </div>
     """
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Streamlit page setup
+# ───────────────────────────────────────────────────────────────
+# ✅ Streamlit App Setup
 st.set_page_config(page_title="Reservoir Sampling Tool", layout="wide")
 st.markdown(get_logo_base64("hadreams_logo.png", width=100), unsafe_allow_html=True)
 st.title("🎣 Reservoir Sampling Randomizer v3.0")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Reservoir centers
 RESERVOIRS = {
     "Steinaker Reservoir": [40.525, -109.55],
     "Red Fleet Reservoir": [40.625, -109.465],
     "Big Sandwash Reservoir": [40.314, -110.058]
 }
 
-# Sidebar controls
 st.sidebar.subheader("📍 Map Settings")
 selected_res = st.sidebar.selectbox("Center Map On", list(RESERVOIRS.keys()))
 center_latlon = RESERVOIRS[selected_res]
 num_sites = st.sidebar.slider("🎯 Number of Random Sample Sites", 1, 50, 6)
 generate = st.sidebar.button("⚙️ Generate New Grid + Sites")
 
-# Session state
+# ───────────────────────────────────────────────────────────────
+# Session State Init
 if "lake_polygon" not in st.session_state:
     st.session_state.lake_polygon = None
 if "site_coords" not in st.session_state:
@@ -55,14 +61,14 @@ if "grid_size_m" not in st.session_state:
 if "grid_size_deg" not in st.session_state:
     st.session_state.grid_size_deg = None
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Initial map + drawing tool
+# ───────────────────────────────────────────────────────────────
+# Initial Draw Map
 m = folium.Map(location=center_latlon, zoom_start=15, tiles="Esri.WorldImagery")
 Draw(export=True).add_to(m)
 draw_data = st_folium(m, height=600, width=1000)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Grid + Site Generation
+# ───────────────────────────────────────────────────────────────
+# Handle Grid + Site Generation
 if generate:
     st.session_state.lake_polygon = None
     st.session_state.site_coords = []
@@ -81,13 +87,14 @@ if generate:
             lake_poly = Polygon(coords)
             st.session_state.lake_polygon = lake_poly
 
-            # Area and grid spacing
+            # Calculate area and spacing
             project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32612", always_xy=True).transform
             lake_poly_utm = transform(project, lake_poly)
             area_m2 = lake_poly_utm.area
             area_acres = area_m2 * 0.000247105
             st.sidebar.markdown(f"📏 Lake Area: **{area_acres:.1f} acres**")
 
+            # AFS spacing rules
             if area_acres < 300:
                 grid_size_m = 61
             elif area_acres <= 800:
@@ -98,11 +105,11 @@ if generate:
             st.session_state.grid_size_m = grid_size_m
             st.sidebar.markdown(f"📐 Grid Spacing: **{grid_size_m} m**")
 
-            # Grid conversion
             meters_per_degree = 111000
             grid_size_deg = grid_size_m / meters_per_degree
             st.session_state.grid_size_deg = grid_size_deg
 
+            # Generate grid
             minx, miny, maxx, maxy = lake_poly.bounds
             grid_cells = []
             x = minx
@@ -125,8 +132,8 @@ if generate:
                 st.session_state.site_coords = centroids
                 st.success("✅ Sampling sites generated!")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Display map and allow editing
+# ───────────────────────────────────────────────────────────────
+# Show Result Map + Export
 if st.session_state.lake_polygon and st.session_state.site_coords:
     result_map = folium.Map(
         location=[st.session_state.lake_polygon.centroid.y,
@@ -137,7 +144,6 @@ if st.session_state.lake_polygon and st.session_state.site_coords:
 
     folium.GeoJson(st.session_state.lake_polygon, name="Lake Boundary").add_to(result_map)
 
-    # Draw grid
     gsize = st.session_state.grid_size_deg
     minx, miny, maxx, maxy = st.session_state.lake_polygon.bounds
     x = minx
