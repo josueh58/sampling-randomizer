@@ -10,6 +10,16 @@ from shapely.ops import transform
 import pyproj
 import math
 
+st.markdown(
+    """
+    <div style='position: fixed; top: 10px; left: 10px; z-index: 1000;'>
+        <img src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABAAAAAQACAIAAADwf7zUAAEAAElEQVR4nDT9zZbkSLKsi4mo2g/gHpFVvbvvJRff/3lILg74DJdn766uzAh3AGamKhwgzygGEYNMONxMVVTkU+Zf/y+yIC/JWApiyjuUQMKrxrQKTdIXbEMsUDBTJoEs1XIhQ6xwcCZcOdNq0zqRYKkwpBKSJVCqVrIQuUCHeeY0AWTOg+0HNcAqJTXTdssFSlYYAU2AITolOgXlZO2ZwUy4MwIKWIMTY6oYCVgDTOukOegYR9Ru8RY6CdJEEqEEJdCgQClCIVcKFolaAFMEKM4AArUhgVRqmlcIiSQhmFEitWTFMSdKRS5pkQ1IeaVCMIKIU3VjLNAEMVIkEqxEClTCLC
+    ' width='100'/>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 st.set_page_config(page_title="Reservoir Sampling Tool", layout="wide")
 st.title("🎣 Reservoir Sampling Randomizer v3.0")
 
