@@ -3,42 +3,49 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import Draw
 import geopandas as gpd
-from shapely.geometry import Polygon, box, Point
-import random
-import pandas as pd
+from shapely.geometry import Polygon, box
 from shapely.ops import transform
 import pyproj
-import math
+import pandas as pd
+from PIL import Image
+import base64
+from io import BytesIO
 
-# Streamlit page config
-st.set_page_config(page_title="Reservoir Sampling Tool", layout="wide")
-
-# H.A.DREAMS embedded base64 logo (snippet shown here, full in real code)
-st.markdown(
-    """
+# ─────────────────────────────────────────────────────────────────────────────
+# Function to encode and display H.A.DREAMS logo
+def get_logo_base64(path="hadreams_logo.png", width=100):
+    img = Image.open(path)
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode()
+    return f"""
     <div style='position: fixed; top: 10px; left: 10px; z-index: 1000;'>
-        <img src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABAAAAAQACAIAAADwf7zUAAEAAElEQVR4nDT9zZbkSLKsi4mo2g/gHpFVvbvvJRff/3lILg74DJdn766uzAh3AGamKhwgzygGEYNMONxMVVTkU+Zf/y+yIC/JWApiyjuUQMKrxrQKTdIXbEMsUDBTJoEs1XIhQ6xwcCZcOdNq0zqRYKkwpBKSJVCqVrIQuUCHeeY0AWTOg+0HNcAqJTXTdssFSlYYAU2AITolOgXlZO2ZwUy4MwIKWIMTY6oYCVgDTOukOegYR9Ru8RY6CdJEEqEEJdCgQClCIVcKFolaAFMEKM4AArUhgVRqmlcIiSQhmFEitWTFMSdKRS5pkQ1IeaVCMIKIU3VjLNAEMVIkEqxEClTCLCNTaA+uN1hAKZPmFHItNie3eP1l+x/USolmuS4vW0Q4AmXPnFZM4xLNaKABUgywZix3A1005oUU2lPrTRbQkAuxVB/EhKgIeBGWecdKYKVkLFih6mJamuKUdwOhqdo1J92BSl1hdLgUpCsDVphTcMRibTBhpiQWQ0gIWGWcYiEEY/jma4iWkCthBhJjqTjBRBqQK6xXLGWmXA6TEqxYJ7xAoRTN4S6lgTmH9Q0BAMopgkgFAVntACKnt6YrWKQgQBo0UwZhOhpa1VjEhDkUsk4QCmhBBIm80D4RA2S6WyxlSqJXKKmUV2bejyUpIzUmS0Ms1A3rjbpjnjCHO+ZITfpDOqgNLsxBb0iiEQll0Bwx4RvikhlLy/Nt+xPjgBsWkBN9z7HMUrZp/WJ5wCrXIXcqlYm6aSzqopekWQqsIKSgAAhWoAQz5VQwJ/qODM0BOimUDVpAVZygkYY5VIwo0JKSbKAQCzRYlSYcEAEiFr0ihdZyHGYOBU
-        ' width='100'/>
+        <img src="data:image/png;base64,{encoded}" width="{width}"/>
     </div>
-    """,
-    unsafe_allow_html=True
-)
+    """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Streamlit page setup
+st.set_page_config(page_title="Reservoir Sampling Tool", layout="wide")
+st.markdown(get_logo_base64("hadreams_logo.png", width=100), unsafe_allow_html=True)
 st.title("🎣 Reservoir Sampling Randomizer v3.0")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Reservoir centers
 RESERVOIRS = {
     "Steinaker Reservoir": [40.525, -109.55],
     "Red Fleet Reservoir": [40.625, -109.465],
     "Big Sandwash Reservoir": [40.314, -110.058]
 }
 
+# Sidebar controls
 st.sidebar.subheader("📍 Map Settings")
 selected_res = st.sidebar.selectbox("Center Map On", list(RESERVOIRS.keys()))
 center_latlon = RESERVOIRS[selected_res]
-
 num_sites = st.sidebar.slider("🎯 Number of Random Sample Sites", 1, 50, 6)
 generate = st.sidebar.button("⚙️ Generate New Grid + Sites")
 
+# Session state
 if "lake_polygon" not in st.session_state:
     st.session_state.lake_polygon = None
 if "site_coords" not in st.session_state:
@@ -48,10 +55,14 @@ if "grid_size_m" not in st.session_state:
 if "grid_size_deg" not in st.session_state:
     st.session_state.grid_size_deg = None
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Initial map + drawing tool
 m = folium.Map(location=center_latlon, zoom_start=15, tiles="Esri.WorldImagery")
 Draw(export=True).add_to(m)
 draw_data = st_folium(m, height=600, width=1000)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Grid + Site Generation
 if generate:
     st.session_state.lake_polygon = None
     st.session_state.site_coords = []
@@ -70,6 +81,7 @@ if generate:
             lake_poly = Polygon(coords)
             st.session_state.lake_polygon = lake_poly
 
+            # Area and grid spacing
             project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32612", always_xy=True).transform
             lake_poly_utm = transform(project, lake_poly)
             area_m2 = lake_poly_utm.area
@@ -86,6 +98,7 @@ if generate:
             st.session_state.grid_size_m = grid_size_m
             st.sidebar.markdown(f"📐 Grid Spacing: **{grid_size_m} m**")
 
+            # Grid conversion
             meters_per_degree = 111000
             grid_size_deg = grid_size_m / meters_per_degree
             st.session_state.grid_size_deg = grid_size_deg
@@ -112,6 +125,8 @@ if generate:
                 st.session_state.site_coords = centroids
                 st.success("✅ Sampling sites generated!")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Display map and allow editing
 if st.session_state.lake_polygon and st.session_state.site_coords:
     result_map = folium.Map(
         location=[st.session_state.lake_polygon.centroid.y,
@@ -122,6 +137,7 @@ if st.session_state.lake_polygon and st.session_state.site_coords:
 
     folium.GeoJson(st.session_state.lake_polygon, name="Lake Boundary").add_to(result_map)
 
+    # Draw grid
     gsize = st.session_state.grid_size_deg
     minx, miny, maxx, maxy = st.session_state.lake_polygon.bounds
     x = minx
